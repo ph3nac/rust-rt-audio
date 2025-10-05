@@ -22,6 +22,10 @@ struct Args {
     /// Buffer size (frames)
     #[arg(long, default_value_t = 256)]
     buffer: u32,
+
+    /// Log every N callbacks (0=disable, 1=every time). Day1は非RTセーフなprintlnで観察する
+    #[arg(long, default_value_t = 10)]
+    log_every: u64,
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -122,7 +126,11 @@ fn main() -> Result<(), anyhow::Error> {
         .sample_format();
 
     let stream = match sample_format {
-        SampleFormat::F32 => build_stream::<f32>(default_out_device.as_ref().unwrap(), &config)?,
+        SampleFormat::F32 => build_stream::<f32>(
+            default_out_device.as_ref().unwrap(),
+            &config,
+            args.log_every,
+        )?,
         other => anyhow::bail!("Unsupported sample format: {:?}", other),
     };
 
@@ -158,21 +166,51 @@ fn match_config(range: &SupportedStreamConfigRange, def: &SupportedStreamConfig)
         && def.sample_rate().0 <= range.max_sample_rate().0
 }
 
-fn build_stream<T>(device: &Device, config: &StreamConfig) -> Result<cpal::Stream, anyhow::Error>
+fn build_stream<T>(
+    device: &Device,
+    config: &StreamConfig,
+    log_every: u64,
+) -> Result<cpal::Stream, anyhow::Error>
 where
     T: cpal::SizedSample + num_traits::Zero,
 {
     let err_fn = |e| eprintln!("[stream error] {e}");
+    let mut last_time = std::time::Instant::now();
+    let mut last_len: usize = 0;
+    let mut n: u64 = 0;
+
+    let channels = config.channels;
+
     let stream = device.build_output_stream(
         config,
-        move |data: &mut [T], _| {
-            // 無音：ゼロ埋め（ログは出さない：RT負荷になるため）
-            for s in data.iter_mut() {
-                *s = T::zero();
+        move |data: &mut [T], _info| {
+            if log_every > 0 {
+                n += 1;
+                let now = std::time::Instant::now();
+                let dt = now.duration_since(last_time).as_secs_f64();
+                last_time = now;
+
+                let len = data.len();
+                if len != last_len && last_len != 0 {
+                    println!(
+                        "⚠️ buffer size changed: {} -> {} (frames per callback)",
+                        last_len, len
+                    );
+                }
+                last_len = len;
+
+                if n % log_every == 0 {
+                    let ch = channels as usize;
+                    let frames = if ch > 0 { len / ch } else { len };
+                    println!(
+                        "[cb #{:>6}] frames/cb: {:>5} | samples: {:>5} | Δt={:.6}s",
+                        n, frames, len, dt
+                    );
+                }
             }
         },
         err_fn,
-        None, // latency hint は未指定（今日は扱わない）
+        None,
     )?;
     Ok(stream)
 }
