@@ -1,9 +1,32 @@
-use cpal::traits::{DeviceTrait, HostTrait};
+use clap::Parser;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
     BufferSize, Device, SampleFormat, SampleRate, StreamConfig, SupportedBufferSize,
     SupportedStreamConfig, SupportedStreamConfigRange,
 };
+use std::fmt::Debug;
+use std::thread;
+use std::time::Duration;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Minimal CPAL output test")]
+struct Args {
+    /// Sample rate (Hz)
+    #[arg(long, default_value_t = 48000)]
+    sr: u32,
+
+    /// Channel count
+    #[arg(long, default_value_t = 2)]
+    ch: u16,
+
+    /// Buffer size (frames)
+    #[arg(long, default_value_t = 256)]
+    buffer: u32,
+}
+
 fn main() -> Result<(), anyhow::Error> {
+    let args = Args::parse();
+
     let host = cpal::default_host();
     let devices = host.devices()?;
     let default_out_device = host.default_output_device();
@@ -82,17 +105,14 @@ fn main() -> Result<(), anyhow::Error> {
         }
     }
 
-    const REQUESTED_SR: u32 = 48_000;
-    const REQUESTED_CH: u16 = 2;
-    const REQUESTED_BUFFER_FRAMES: u32 = 256;
     println!(
         "\nRequested: SR={} Hz, Channels={}, Buffer={} frames",
-        REQUESTED_SR, REQUESTED_CH, REQUESTED_BUFFER_FRAMES
+        args.sr, args.ch, args.buffer
     );
     let config = StreamConfig {
-        channels: REQUESTED_CH,
-        sample_rate: SampleRate(REQUESTED_SR),
-        buffer_size: BufferSize::Fixed(REQUESTED_BUFFER_FRAMES),
+        channels: args.ch,
+        sample_rate: SampleRate(args.sr),
+        buffer_size: BufferSize::Fixed(args.buffer),
     };
 
     let sample_format = default_out_device
@@ -105,8 +125,15 @@ fn main() -> Result<(), anyhow::Error> {
         SampleFormat::F32 => build_stream::<f32>(default_out_device.as_ref().unwrap(), &config)?,
         other => anyhow::bail!("Unsupported sample format: {:?}", other),
     };
-    drop(stream);
 
+    stream.play()?;
+    thread::sleep(Duration::from_secs(3));
+    println!("Stopped after 3s.");
+
+    println!(
+        "Actual   : SR={} Hz, Ch={} (Buffer/Latency=N/A; backend-dependent)",
+        config.sample_rate.0, config.channels,
+    );
     Ok(())
 }
 
